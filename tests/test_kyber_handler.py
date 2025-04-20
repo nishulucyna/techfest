@@ -18,7 +18,7 @@ logger.info(
 )
 
 # Create client and server with sample KEM mechanisms
-kemalg = "ML-KEM-512"
+kemalg = "ML-KEM-1024"
 with oqs.KeyEncapsulation(kemalg) as client:
     with oqs.KeyEncapsulation(kemalg) as server:
         logger.info("Key encapsulation details:\n%s", pformat(client.details))
