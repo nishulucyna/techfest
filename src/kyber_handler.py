@@ -116,4 +116,3 @@ if __name__ == "__main__":
         print("Direct run of Kyber handler finished.")
     except Exception as e:
         print(f"Error during direct run: {e}")
-
