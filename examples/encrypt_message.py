@@ -277,7 +277,7 @@ def main():
 
 
     # --- Step 3: Encrypt the Original AES Key using Kyber Shared Secret (Directly) ---
-    print("\n[STEP 3: AES Encryption of AES Key (Using Raw Kyber Shared Secret)]")
+    print("\n[STEP 3: Second AES Encryption of AES Key (Using Kyber Shared Secret)]")
 
     try:
         # Generate a new random IV for this final AES encryption of the AES key
