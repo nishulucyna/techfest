@@ -9,7 +9,6 @@ from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf import KeyDerivationFunction
 from cryptography.hazmat.backends import default_backend
 
 # Import OQS Kyber and Dilithium modules directly
@@ -49,12 +48,13 @@ def decrypt_aes256_cbc(ciphertext: bytes, key: bytes, iv: bytes):
     except (ValueError, KeyError) as e:
         raise ValueError(f"Decryption failed: {e}")
 
-# --- AES Key Encryption Using HKDF ---
+# --- AES Key Encryption Using HKDF with Random Salt ---
 def encrypt_aes256_cbc_key_with_hkdf(aes_key_bytes: bytes, shared_secret_bytes: bytes, iv_bytes: bytes):
+    salt = get_random_bytes(16)  # Random 16-byte salt
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
-        length=32,   # 256-bit AES key
-        salt=None,
+        length=32,
+        salt=salt,
         info=b"AES encryption",
         backend=default_backend()
     )
@@ -62,13 +62,18 @@ def encrypt_aes256_cbc_key_with_hkdf(aes_key_bytes: bytes, shared_secret_bytes: 
 
     cipher = AES.new(derived_key, AES.MODE_CBC, iv_bytes)
     padded_key = pad(aes_key_bytes, AES.block_size)
-    return cipher.encrypt(padded_key)
+    encrypted_key = cipher.encrypt(padded_key)
+
+    return salt + encrypted_key  # Prepend salt to ciphertext
 
 def decrypt_aes256_cbc_key_with_hkdf(encrypted_key_ciphertext: bytes, shared_secret_bytes: bytes, iv_bytes: bytes):
+    salt = encrypted_key_ciphertext[:16]
+    ciphertext = encrypted_key_ciphertext[16:]
+
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
-        length=32,   # 256-bit AES key
-        salt=None,
+        length=32,
+        salt=salt,
         info=b"AES encryption",
         backend=default_backend()
     )
@@ -76,7 +81,7 @@ def decrypt_aes256_cbc_key_with_hkdf(encrypted_key_ciphertext: bytes, shared_sec
 
     try:
         cipher = AES.new(derived_key, AES.MODE_CBC, iv_bytes)
-        decrypted_padded_key = cipher.decrypt(encrypted_key_ciphertext)
+        decrypted_padded_key = cipher.decrypt(ciphertext)
         original_aes_key_bytes = unpad(decrypted_padded_key, AES.block_size)
         return original_aes_key_bytes
     except (ValueError, KeyError) as e:
@@ -219,7 +224,7 @@ def main():
     try:
         decrypted_aes_key_bytes = decrypt_aes256_cbc_key_with_hkdf(
             encrypted_aes_key_ciphertext_bytes,
-            kyber_shared_secret_bytes,  # Use the shared secret obtained during encapsulation
+            kyber_shared_secret_bytes,
             iv_for_key_encryption_bytes
         )
         print("Decrypted AES Key Using HKDF Successful!")
@@ -228,7 +233,6 @@ def main():
         sys.exit(1)
 
     print("\n[STEP 6: Decapsulate Kyber Key]")
-    # For demonstration, the shared secret obtained during encapsulation IS the result of decapsulation
     kyber_shared_secret_decrypted = kyber_shared_secret_bytes
     print("Kyber Key Decapsulation (simulated) Successful!")
     print("Shared Secret Matches: ", kyber_shared_secret_bytes == kyber_shared_secret_decrypted)
