@@ -1,2 +1,3 @@
 pycryptodome>=3.10
+cryptography>=3.3.2
 oqs>=0.8
