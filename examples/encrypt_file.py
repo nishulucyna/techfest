@@ -210,21 +210,50 @@ def main():
 
     print("\n--- Information to Transmit for Decryption and Verification ---")
     print("Kyber Client Secret Key (Base64) :", base64.b64encode(kyber_client_secret_key_bytes).decode('utf-8'))
-    print("Kyber Ciphertext (Base64)         :", base64.b64encode(kyber_ciphertext_bytes).decode('utf-8'))
+    print("Kyber Ciphertext (Base64)        :", base64.b64encode(kyber_ciphertext_bytes).decode('utf-8'))
     print("IV (for key encryption) (Base64) :", iv_for_key_encryption_b64)
     print("Ciphertext (of original AES key) (Base64):", encrypted_aes_key_ciphertext_b64)
-    print("AES IV (for message) (Base64)     :", original_aes_iv_b64)
+    print("AES IV (for message) (Base64)    :", original_aes_iv_b64)
     print("Ciphertext (of message) (Base64) :", original_aes_ciphertext_b64)
-    print("Dilithium Public Key (Base64)     :", dilithium_public_key_b64)
+    print("Dilithium Public Key (Base64)    :", dilithium_public_key_b64)
     print("Dilithium Signature (Base64)     :", dilithium_signature_b64)
 
     # --- Decryption Part ---
     print("\n--- Decryption Process ---")
-    print("[STEP 5: Decrypt AES Key Using HKDF]")
+
+    # [STEP 5: Verify Dilithium Signature]
+    print("\n[STEP 5: Verify Dilithium Signature]")
+    try:
+        is_signature_valid = False
+        with oqs.Signature("ML-DSA-65") as verifier:
+            is_signature_valid = verifier.verify(original_aes_ciphertext_bytes, dilithium_signature_bytes, dilithium_public_key_bytes)
+        print("Dilithium Signature Verification: ", is_signature_valid)
+        if not is_signature_valid:
+            print("Signature verification failed. Aborting decryption.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"\nAn error occurred during Dilithium signature verification: {e}")
+        sys.exit(1)
+
+    # [STEP 6: Decapsulate Kyber Key]
+    print("\n[STEP 6: Decapsulate Kyber Key]")
+    # For demonstration, the shared secret obtained during encapsulation IS the result of decapsulation
+    # In a real decryption program, you would perform Kyber decapsulation here:
+    # with oqs.KeyEncapsulation(kemalg) as client:
+    #     recovered_shared_secret_bytes = client.decap_secret(kyber_ciphertext_bytes, kyber_client_secret_key_bytes)
+    # Then use recovered_shared_secret_bytes for decrypt_aes256_cbc_key_with_hkdf.
+    # For this demo, we use the shared secret bytes obtained during the encapsulation phase:
+    kyber_shared_secret_decrypted = kyber_shared_secret_bytes
+    print("Kyber Key Decapsulation Successful!")
+    print("Shared Secret Matches: ", kyber_shared_secret_bytes == kyber_shared_secret_decrypted)
+
+
+    # [STEP 7: Decrypt AES Key Using HKDF]
+    print("\n[STEP 7: Decrypt AES Key Using HKDF]")
     try:
         decrypted_aes_key_bytes = decrypt_aes256_cbc_key_with_hkdf(
             encrypted_aes_key_ciphertext_bytes,
-            kyber_shared_secret_bytes,
+            kyber_shared_secret_decrypted, # Use the shared secret obtained during encapsulation/decapsulation
             iv_for_key_encryption_bytes
         )
         print("Decrypted AES Key Using HKDF Successful!")
@@ -232,12 +261,9 @@ def main():
         print(f"\nAn error occurred during AES key decryption: {e}")
         sys.exit(1)
 
-    print("\n[STEP 6: Decapsulate Kyber Key]")
-    kyber_shared_secret_decrypted = kyber_shared_secret_bytes
-    print("Kyber Key Decapsulation Successful!")
-    print("Shared Secret Matches: ", kyber_shared_secret_bytes == kyber_shared_secret_decrypted)
 
-    print("\n[STEP 7: Decrypt AES Message]")
+    # [STEP 8: Decrypt AES Message]
+    print("\n[STEP 8: Decrypt AES Message]")
     try:
         decrypted_message = decrypt_aes256_cbc(original_aes_ciphertext_bytes, decrypted_aes_key_bytes, original_aes_iv_bytes)
         print("Decrypted Message:", decrypted_message)
@@ -245,15 +271,6 @@ def main():
         print(f"\nAn error occurred during AES message decryption: {e}")
         sys.exit(1)
 
-    print("\n[STEP 8: Verify Dilithium Signature]")
-    try:
-        is_signature_valid = False
-        with oqs.Signature("ML-DSA-65") as verifier:
-            is_signature_valid = verifier.verify(original_aes_ciphertext_bytes, dilithium_signature_bytes, dilithium_public_key_bytes)
-        print("Dilithium Signature Verification: ", is_signature_valid)
-    except Exception as e:
-        print(f"\nAn error occurred during Dilithium signature verification: {e}")
-        sys.exit(1)
 
 if __name__ == "__main__":
     main()
