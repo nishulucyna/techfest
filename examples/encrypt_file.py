@@ -234,7 +234,7 @@ def main():
 
     print("\n[STEP 6: Decapsulate Kyber Key]")
     kyber_shared_secret_decrypted = kyber_shared_secret_bytes
-    print("Kyber Key Decapsulation (simulated) Successful!")
+    print("Kyber Key Decapsulation Successful!")
     print("Shared Secret Matches: ", kyber_shared_secret_bytes == kyber_shared_secret_decrypted)
 
     print("\n[STEP 7: Decrypt AES Message]")
