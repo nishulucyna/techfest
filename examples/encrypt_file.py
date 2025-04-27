@@ -15,7 +15,7 @@ from cryptography.hazmat.backends import default_backend
 try:
     import oqs
 
-    # Configure logging for OQS output (optional, but helpful for debugging)
+    # Configure logging for OQS output
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
     if not logger.handlers:
@@ -28,8 +28,8 @@ except ImportError:
 
 # --- AES Encryption/Decryption Functions ---
 def encrypt_aes256_cbc(message: str):
-    key = get_random_bytes(32)   # Generate 256-bit AES key (32 bytes)
-    iv = get_random_bytes(16)    # Generate 128-bit IV (16 bytes)
+    key = get_random_bytes(32)  # 256-bit AES key
+    iv = get_random_bytes(16)   # 128-bit IV
     cipher = AES.new(key, AES.MODE_CBC, iv)
     padded_data = pad(message.encode('utf-8'), AES.block_size)
     ciphertext = cipher.encrypt(padded_data)
@@ -50,7 +50,7 @@ def decrypt_aes256_cbc(ciphertext: bytes, key: bytes, iv: bytes):
 
 # --- AES Key Encryption Using HKDF with Random Salt ---
 def encrypt_aes256_cbc_key_with_hkdf(aes_key_bytes: bytes, shared_secret_bytes: bytes, iv_bytes: bytes):
-    salt = get_random_bytes(16)  # Random 16-byte salt
+    salt = get_random_bytes(16)
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
@@ -64,7 +64,7 @@ def encrypt_aes256_cbc_key_with_hkdf(aes_key_bytes: bytes, shared_secret_bytes: 
     padded_key = pad(aes_key_bytes, AES.block_size)
     encrypted_key = cipher.encrypt(padded_key)
 
-    return salt + encrypted_key  # Prepend salt to ciphertext
+    return salt + encrypted_key  # Prepend salt
 
 def decrypt_aes256_cbc_key_with_hkdf(encrypted_key_ciphertext: bytes, shared_secret_bytes: bytes, iv_bytes: bytes):
     salt = encrypted_key_ciphertext[:16]
@@ -87,12 +87,9 @@ def decrypt_aes256_cbc_key_with_hkdf(encrypted_key_ciphertext: bytes, shared_sec
     except (ValueError, KeyError) as e:
         raise ValueError(f"AES key decryption failed: {e}")
 
-# --- Kyber Key Encapsulation Function ---
+# --- Kyber Key Encapsulation ---
 def perform_kyber_encapsulation(kemalg: str = "ML-KEM-1024"):
     logger.info("\n--- Kyber Encapsulation Process ---")
-    kyber_shared_secret_client = None
-    kyber_ciphertext = None
-    kyber_client_secret_key = None
     try:
         with oqs.KeyEncapsulation(kemalg) as client:
             with oqs.KeyEncapsulation(kemalg) as server:
@@ -102,9 +99,9 @@ def perform_kyber_encapsulation(kemalg: str = "ML-KEM-1024"):
                 kyber_ciphertext, kyber_shared_secret_server = server.encap_secret(public_key_client)
                 kyber_shared_secret_client = client.decap_secret(kyber_ciphertext)
 
-            logger.info("Shared secretes coincide: %s", kyber_shared_secret_client == kyber_shared_secret_server)
+            logger.info("Shared secrets coincide: %s", kyber_shared_secret_client == kyber_shared_secret_server)
             if kyber_shared_secret_client != kyber_shared_secret_server:
-                raise ValueError("Kyber shared secrets do not coincide!")
+                raise ValueError("Kyber shared secrets do not match!")
 
             return {
                 "client_secret_key": kyber_client_secret_key,
@@ -116,13 +113,9 @@ def perform_kyber_encapsulation(kemalg: str = "ML-KEM-1024"):
         logger.error(f"An error occurred during Kyber encapsulation: {e}")
         raise
 
-# --- Dilithium Signature Functions ---
+# --- Dilithium Signature ---
 def perform_dilithium_signature(data_to_sign: bytes, sigalg: str = "ML-DSA-65"):
     logger.info("\n--- Dilithium Signature Process ---")
-    signature_bytes = None
-    public_key_bytes = None
-    private_key_bytes = None
-    is_valid = False
     try:
         with oqs.Signature(sigalg) as signer:
             public_key_bytes = signer.generate_keypair()
@@ -143,134 +136,104 @@ def perform_dilithium_signature(data_to_sign: bytes, sigalg: str = "ML-DSA-65"):
         logger.error(f"An error occurred during Dilithium signature: {e}")
         raise
 
-# --- Main Function to Orchestrate ---
+# --- Main Orchestration ---
 def main():
     print("--- Full Hybrid Encryption with Dilithium Signatures (Using HKDF) ---")
     message_to_encrypt = input("Enter the message to encrypt with AES: ")
 
     try:
         aes_encryption_results = encrypt_aes256_cbc(message_to_encrypt)
-        original_aes_key_bytes = aes_encryption_results["key"]
-        original_aes_iv_bytes = aes_encryption_results["iv"]
-        original_aes_ciphertext_bytes = aes_encryption_results["ciphertext"]
-        original_aes_key_b64 = base64.b64encode(original_aes_key_bytes).decode('utf-8')
-        original_aes_iv_b64 = base64.b64encode(original_aes_iv_bytes).decode('utf-8')
-        original_aes_ciphertext_b64 = base64.b64encode(original_aes_ciphertext_bytes).decode('utf-8')
+        aes_key = aes_encryption_results["key"]
+        aes_iv = aes_encryption_results["iv"]
+        aes_ciphertext = aes_encryption_results["ciphertext"]
         print("Initial AES Encryption Successful!")
-        print("AES IV (for message)     :", original_aes_iv_b64)
-        print("Ciphertext (of message)  :", original_aes_ciphertext_b64)
 
     except Exception as e:
-        print(f"\nAn error occurred during initial AES encryption: {e}")
+        print(f"\nAn error occurred during AES encryption: {e}")
         sys.exit(1)
 
     print("\n[STEP 2: Kyber Key Encapsulation]")
-    kemalg = "ML-KEM-1024"
     try:
-        kyber_results = perform_kyber_encapsulation(kemalg)
-        kyber_client_secret_key_bytes = kyber_results["client_secret_key"]
-        kyber_ciphertext_bytes = kyber_results["ciphertext"]
-        kyber_shared_secret_bytes = kyber_results["shared_secret"]
-        print("Kyber Key Encapsulation Successful!")
+        kyber_results = perform_kyber_encapsulation()
+        kyber_client_secret_key = kyber_results["client_secret_key"]
+        kyber_ciphertext = kyber_results["ciphertext"]
+        kyber_shared_secret = kyber_results["shared_secret"]
+        print("Kyber Key Encapsulation Successful! Shared Secrets Match!")
 
     except Exception as e:
-        print(f"\nAn error occurred during Kyber key encapsulation: {e}")
+        print(f"\nAn error occurred during Kyber encapsulation: {e}")
         sys.exit(1)
 
     print("\n[STEP 3: Encrypt AES Key Using HKDF]")
     try:
-        iv_for_key_encryption_bytes = get_random_bytes(16)
-        encrypted_aes_key_ciphertext_bytes = encrypt_aes256_cbc_key_with_hkdf(
-            original_aes_key_bytes,
-            kyber_shared_secret_bytes,
-            iv_for_key_encryption_bytes
+        iv_for_key_encryption = get_random_bytes(16)
+        encrypted_aes_key = encrypt_aes256_cbc_key_with_hkdf(
+            aes_key, kyber_shared_secret, iv_for_key_encryption
         )
-        iv_for_key_encryption_b64 = base64.b64encode(iv_for_key_encryption_bytes).decode('utf-8')
-        encrypted_aes_key_ciphertext_b64 = base64.b64encode(encrypted_aes_key_ciphertext_bytes).decode('utf-8')
         print("AES Key Encryption with HKDF Successful!")
 
     except Exception as e:
-        print(f"\nAn error occurred during the final AES key encryption: {e}")
+        print(f"\nAn error occurred during AES key encryption: {e}")
         sys.exit(1)
 
-    print("\n[STEP 4: Dilithium Signature of Encrypted Message]")
+    print("\n[STEP 4: Dilithium Signature of Encrypted Payload]")
     try:
-        dilithium_results = perform_dilithium_signature(original_aes_ciphertext_bytes)
-        dilithium_signature_bytes = dilithium_results["signature"]
-        dilithium_public_key_bytes = dilithium_results["public_key"]
-        dilithium_private_key_bytes = dilithium_results["private_key"]
-        dilithium_signature_b64 = base64.b64encode(dilithium_signature_bytes).decode('utf-8')
-        dilithium_public_key_b64 = base64.b64encode(dilithium_public_key_bytes).decode('utf-8')
-        dilithium_private_key_b64 = base64.b64encode(dilithium_private_key_bytes).decode('utf-8')
+        # Prepare the package for signing: concatenate all important parts
+        package_to_sign = kyber_ciphertext + iv_for_key_encryption + encrypted_aes_key + aes_iv + aes_ciphertext
+        dilithium_results = perform_dilithium_signature(package_to_sign)
+        dilithium_signature = dilithium_results["signature"]
+        dilithium_public_key = dilithium_results["public_key"]
         print("Dilithium Signature Successful!")
 
     except Exception as e:
         print(f"\nAn error occurred during Dilithium signature: {e}")
         sys.exit(1)
 
-    print("\n--- Information to Transmit for Decryption and Verification ---")
-    print("Kyber Client Secret Key (Base64) :", base64.b64encode(kyber_client_secret_key_bytes).decode('utf-8'))
-    print("Kyber Ciphertext (Base64)        :", base64.b64encode(kyber_ciphertext_bytes).decode('utf-8'))
-    print("IV (for key encryption) (Base64) :", iv_for_key_encryption_b64)
-    print("Ciphertext (of original AES key) (Base64):", encrypted_aes_key_ciphertext_b64)
-    print("AES IV (for message) (Base64)    :", original_aes_iv_b64)
-    print("Ciphertext (of message) (Base64) :", original_aes_ciphertext_b64)
-    print("Dilithium Public Key (Base64)    :", dilithium_public_key_b64)
-    print("Dilithium Signature (Base64)     :", dilithium_signature_b64)
+    # --- Display Data to Transmit ---
+    print("\n--- Data to Transmit ---")
+    print("Kyber Client Secret Key:", base64.b64encode(kyber_client_secret_key).decode())
+    print("Kyber Ciphertext:", base64.b64encode(kyber_ciphertext).decode())
+    print("IV for AES Key Encryption:", base64.b64encode(iv_for_key_encryption).decode())
+    print("Encrypted AES Key:", base64.b64encode(encrypted_aes_key).decode())
+    print("AES IV for Message:", base64.b64encode(aes_iv).decode())
+    print("AES Ciphertext of Message:", base64.b64encode(aes_ciphertext).decode())
+    print("Dilithium Public Key:", base64.b64encode(dilithium_public_key).decode())
+    print("Dilithium Signature:", base64.b64encode(dilithium_signature).decode())
 
     # --- Decryption Part ---
     print("\n--- Decryption Process ---")
 
-    # [STEP 5: Verify Dilithium Signature]
     print("\n[STEP 5: Verify Dilithium Signature]")
     try:
-        is_signature_valid = False
+        package_to_verify = kyber_ciphertext + iv_for_key_encryption + encrypted_aes_key + aes_iv + aes_ciphertext
         with oqs.Signature("ML-DSA-65") as verifier:
-            is_signature_valid = verifier.verify(original_aes_ciphertext_bytes, dilithium_signature_bytes, dilithium_public_key_bytes)
-        print("Dilithium Signature Verification: ", is_signature_valid)
+            is_signature_valid = verifier.verify(package_to_verify, dilithium_signature, dilithium_public_key)
+        print("Dilithium Signature Verification:", is_signature_valid)
         if not is_signature_valid:
-            print("Signature verification failed. Aborting decryption.")
+            print("\n[ERROR] Signature invalid! Aborting decryption.")
             sys.exit(1)
+
     except Exception as e:
-        print(f"\nAn error occurred during Dilithium signature verification: {e}")
+        print(f"\nAn error occurred during signature verification: {e}")
         sys.exit(1)
 
-    # [STEP 6: Decapsulate Kyber Key]
-    print("\n[STEP 6: Decapsulate Kyber Key]")
-    # For demonstration, the shared secret obtained during encapsulation IS the result of decapsulation
-    # In a real decryption program, you would perform Kyber decapsulation here:
-    # with oqs.KeyEncapsulation(kemalg) as client:
-    #     recovered_shared_secret_bytes = client.decap_secret(kyber_ciphertext_bytes, kyber_client_secret_key_bytes)
-    # Then use recovered_shared_secret_bytes for decrypt_aes256_cbc_key_with_hkdf.
-    # For this demo, we use the shared secret bytes obtained during the encapsulation phase:
-    kyber_shared_secret_decrypted = kyber_shared_secret_bytes
-    print("Kyber Key Decapsulation Successful!")
-    print("Shared Secret Matches: ", kyber_shared_secret_bytes == kyber_shared_secret_decrypted)
-
-
-    # [STEP 7: Decrypt AES Key Using HKDF]
-    print("\n[STEP 7: Decrypt AES Key Using HKDF]")
+    print("\n[STEP 6: Decrypt AES Key Using HKDF]")
     try:
-        decrypted_aes_key_bytes = decrypt_aes256_cbc_key_with_hkdf(
-            encrypted_aes_key_ciphertext_bytes,
-            kyber_shared_secret_decrypted, # Use the shared secret obtained during encapsulation/decapsulation
-            iv_for_key_encryption_bytes
+        decrypted_aes_key = decrypt_aes256_cbc_key_with_hkdf(
+            encrypted_aes_key, kyber_shared_secret, iv_for_key_encryption
         )
-        print("Decrypted AES Key Using HKDF Successful!")
+        print("Decrypted AES Key Successful!")
     except Exception as e:
         print(f"\nAn error occurred during AES key decryption: {e}")
         sys.exit(1)
 
-
-    # [STEP 8: Decrypt AES Message]
-    print("\n[STEP 8: Decrypt AES Message]")
+    print("\n[STEP 7: Decrypt AES Message]")
     try:
-        decrypted_message = decrypt_aes256_cbc(original_aes_ciphertext_bytes, decrypted_aes_key_bytes, original_aes_iv_bytes)
+        decrypted_message = decrypt_aes256_cbc(aes_ciphertext, decrypted_aes_key, aes_iv)
         print("Decrypted Message:", decrypted_message)
     except Exception as e:
         print(f"\nAn error occurred during AES message decryption: {e}")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
