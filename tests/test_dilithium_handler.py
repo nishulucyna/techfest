@@ -1,111 +1,93 @@
 import logging
-import base64
-import oqs
 from pprint import pformat
+from sys import stdout
+import time  # Import the time module for benchmarking
+import statistics  # Import statistics for calculating mean
 
-# Configure logging
+import oqs
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+logger.addHandler(logging.StreamHandler(stdout))
 
-# Stream handler to output log messages
-if not logger.handlers:
-    logger.addHandler(logging.StreamHandler())
+message = b"This is the message to sign" * 10  # Make message slightly longer
 
-logger.info("liboqs version: %s", oqs.oqs_version())
-logger.info("liboqs-python version: %s", oqs.oqs_python_version())
-logger.info(
-    "Enabled signature mechanisms:\n%s",
-    pformat(oqs.get_enabled_sig_mechanisms(), compact=True),
-)
+# Choose algorithm for NIST Level 5 (Comparable to AES-256)
+# --- CHANGE HERE ---
+sigalg = "ML-DSA-87"
+# --- CHANGE ENDS ---
+logger.info(f"\nBenchmarking Signature Algorithm: {sigalg} (NIST Level 5)")
 
-def perform_dilithium_signing(message: bytes, sigalg: str = "ML-DSA-44"):
-    """
-    Perform digital signature generation using the Dilithium algorithm.
+# Number of iterations for benchmarking
+N_ITERATIONS = 100  # You might adjust this based on performance
+logger.info(f"Running {N_ITERATIONS} iterations for benchmarking...")
 
-    Args:
-        message (bytes): The message to sign.
-        sigalg (str): The signature algorithm to use (default is "ML-DSA-44").
+# Lists to store timings
+keygen_times = []
+sign_times = []
+verify_times = []
 
-    Returns:
-        dict: A dictionary containing the base64 encoded public key, signature.
-    Raises:
-        Exception: If any error occurs during the signing process.
-    """
-    logger.info("\n--- Dilithium Signing Process ---")
-    
+# --- Benchmarking Loop ---
+all_valid = True  # Flag to track if all verifications passed
+for i in range(N_ITERATIONS):
+    # Need fresh objects for each key generation benchmark iteration
     try:
-        # Create signer and verifier with the given signature algorithm
         with oqs.Signature(sigalg) as signer, oqs.Signature(sigalg) as verifier:
-            logger.info("Signature details:\n%s", pformat(signer.details))
 
-            # Generate keypair
+            # 1. Benchmark Key Generation
+            start_time = time.perf_counter()
             signer_public_key = signer.generate_keypair()
-            logger.info(f"Generated keypair for algorithm {sigalg}:")
-            logger.info(f"Public Key: {base64.b64encode(signer_public_key).decode('utf-8')}")
+            end_time = time.perf_counter()
+            keygen_times.append(end_time - start_time)
+            # secret_key = signer.export_secret_key() # Need secret key if recreating signer later
 
-            # Sign the message
+            # 2. Benchmark Signing
+            # Note: Signing uses the private key held internally by 'signer'
+            start_time = time.perf_counter()
             signature = signer.sign(message)
-            logger.info("Message signed successfully.")
+            end_time = time.perf_counter()
+            sign_times.append(end_time - start_time)
 
-            # Return the results in a dictionary, encoded in base64
-            return {
-                "public_key": base64.b64encode(signer_public_key).decode('utf-8'),
-                "signature": base64.b64encode(signature).decode('utf-8')
-            }
+            # 3. Benchmark Verification
+            start_time = time.perf_counter()
+            is_valid = verifier.verify(message, signature, signer_public_key)
+            end_time = time.perf_counter()
+            verify_times.append(end_time - start_time)
 
-    except Exception as e:
-        logger.error(f"An error occurred during Dilithium signing: {e}")
-        raise
+            if not is_valid:
+                logger.warning(f"Signature verification failed during iteration {i+1}!")
+                all_valid = False
+                # Decide if you want to break or continue benchmarking
+                # break
 
+    except oqs.MechanismNotEnabledError:
+        logger.error(f"ERROR: The algorithm '{sigalg}' is not enabled in your liboqs build.")
+        logger.error("Please check your liboqs installation and ensure it was built with support for this algorithm.")
+        # Clear lists as benchmark couldn't complete
+        keygen_times, sign_times, verify_times = [], [], []
+        all_valid = False
+        break  # Exit the loop
 
-def perform_dilithium_verification(message: bytes, signature: bytes, public_key: bytes, sigalg: str = "ML-DSA-44"):
-    """
-    Verifies the signature of a message using the Dilithium algorithm.
+# Check if benchmarking actually ran
+if not keygen_times:
+    logger.error("Benchmarking could not be performed.")
+else:
+    # --- Calculate and Print Results ---
+    avg_keygen_ms = statistics.mean(keygen_times) * 1000
+    avg_sign_ms = statistics.mean(sign_times) * 1000
+    avg_verify_ms = statistics.mean(verify_times) * 1000
 
-    Args:
-        message (bytes): The message whose signature is to be verified.
-        signature (bytes): The signature to verify.
-        public_key (bytes): The public key to verify the signature against.
-        sigalg (str): The signature algorithm to use (default is "ML-DSA-44").
+    # Optionally calculate standard deviation for more insight
+    stdev_keygen_ms = statistics.stdev(keygen_times) * 1000 if N_ITERATIONS > 1 else 0
+    stdev_sign_ms = statistics.stdev(sign_times) * 1000 if N_ITERATIONS > 1 else 0
+    stdev_verify_ms = statistics.stdev(verify_times) * 1000 if N_ITERATIONS > 1 else 0
 
-    Returns:
-        bool: True if the signature is valid, False otherwise.
-    Raises:
-        Exception: If any error occurs during the verification process.
-    """
-    logger.info("\n--- Dilithium Signature Verification Process ---")
-    
-    try:
-        # Create a verifier with the given signature algorithm
-        with oqs.Signature(sigalg) as verifier:
-            # Verify the signature
-            is_valid = verifier.verify(message, signature, public_key)
-            logger.info(f"Signature valid? {is_valid}")
+    logger.info("\n--- Benchmark Results ---")
+    logger.info(f"Algorithm: {sigalg} (NIST Level 5)")
+    logger.info(f"Iterations: {N_ITERATIONS}")
+    logger.info(f"Average Key Generation Time: {avg_keygen_ms:.4f} ms (stdev: {stdev_keygen_ms:.4f} ms)")
+    logger.info(f"Average Sign Time:          {avg_sign_ms:.4f} ms (stdev: {stdev_sign_ms:.4f} ms)")
+    logger.info(f"Average Verify Time:        {avg_verify_ms:.4f} ms (stdev: {stdev_verify_ms:.4f} ms)")
 
-            return is_valid
-
-    except Exception as e:
-        logger.error(f"An error occurred during Dilithium signature verification: {e}")
-        raise
-
-
-# For direct testing of the module
-if __name__ == "__main__":
-    print("Running dilithium_handler.py directly (for testing)...")
-    try:
-        test_message = b"This is the message to sign"
-        
-        # Sign the message
-        signing_results = perform_dilithium_signing(test_message)
-        print("\n--- Dilithium Signature Test Output ---")
-        print("Public Key (Base64):", signing_results["public_key"])
-        print("Signature (Base64):", signing_results["signature"])
-
-        # Verify the signature
-        signature = base64.b64decode(signing_results["signature"])
-        public_key = base64.b64decode(signing_results["public_key"])
-        verification_result = perform_dilithium_verification(test_message, signature, public_key)
-        print("Signature Verified?:", verification_result)
-
-    except Exception as e:
-        print(f"Error during direct run: {e}")
+    # --- Final Verification Check ---
+    logger.info(f"\nOverall verification success during benchmark: {all_valid}")
