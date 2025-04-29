@@ -1,118 +1,111 @@
-# Key encapsulation Python example (as a module)
-
 import logging
 from pprint import pformat
 from sys import stdout
-import base64 # Needed for base64 encoding the results
+import timeit
+import pandas as pd # type: ignore
+import matplotlib.pyplot as plt
+import os
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.backends import default_backend
 
 import oqs
 
-# Configure logging for OQS output
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO) # Keep INFO level to see Kyber details
-# Avoid adding handler multiple times if this module is imported elsewhere
-if not logger.handlers:
-    logger.addHandler(logging.StreamHandler(stdout))
+logger.setLevel(logging.INFO)
+logger.addHandler(logging.StreamHandler(stdout))
 
-# Keep the original logger info calls
-logger.info("liboqs version: %s", oqs.oqs_version())
-logger.info("liboqs-python version: %s", oqs.oqs_python_version())
-logger.info(
-    "Enabled KEM mechanisms:\n%s",
-    pformat(oqs.get_enabled_kem_mechanisms(), compact=True),
-)
+# Configuration for benchmarking
+kem_algorithm = "ML-KEM-1024"
+num_iterations = 100
+salt_length = 32
+salt = os.urandom(salt_length)
+info = b'aes-key'
+key_length = 32
 
+# Lists to store the results
+results = []
 
-def perform_kyber_encapsulation(kemalg: str = "ML-KEM-1024"):
-    """
-    Performs Kyber key encapsulation for a given KEM algorithm.
-    Generates client keypair, server encapsulates, client decapsulates
-    for verification, and returns the results.
+# Benchmarking function
+def benchmark_kem_with_hkdf_timed(kem_alg):
+    with oqs.KeyEncapsulation(kem_alg) as client:
+        with oqs.KeyEncapsulation(kem_alg) as server:
+            # Time encapsulation and key generation
+            encap_keygen_start = timeit.default_timer()
+            public_key_client = client.generate_keypair()
+            secret_key_client = client.secret_key
+            encap_keygen_end = timeit.default_timer()
+            encap_keygen_time = encap_keygen_end - encap_keygen_start
 
-    Args:
-        kemalg (str): The name of the Kyber KEM algorithm (default is "ML-KEM-1024").
-
-    Returns:
-        dict: A dictionary containing the base64 encoded client secret key,
-              ciphertext, and the shared secret (from client decapsulation).
-    Raises:
-        ValueError: If the shared secret, client secret key, or ciphertext are not generated or don't match.
-        Exception: For any errors during the OQS operations.
-    """
-    logger.info("\n--- Kyber Encapsulation Process (from kyber_handler function) ---")
-
-    kyber_shared_secret_client = None
-    kyber_ciphertext = None
-    kyber_client_secret_key = None
-
-    try:
-        # Create client and server with the specified KEM mechanism
-        with oqs.KeyEncapsulation(kemalg) as client:
-            with oqs.KeyEncapsulation(kemalg) as server:
-                logger.info("Key encapsulation details for %s:\n%s", kemalg, pformat(client.details))
-
-                # Client generates its keypair
-                public_key_client = client.generate_keypair()
-                # Export the client's secret key - needed for decryption later
-                kyber_client_secret_key = client.export_secret_key()
-
-                # The server encapsulates its secret using the client's public key
-                # This generates the Kyber ciphertext and the server's copy of the shared secret
-                kyber_ciphertext, kyber_shared_secret_server = server.encap_secret(public_key_client)
-
-                # The client decapsulates the server's ciphertext to obtain the shared secret
-                # This is the shared secret the client will use for decryption
-                kyber_shared_secret_client = client.decap_secret(kyber_ciphertext)
-
-            # Verify that client and server shared secrets match (optional but good practice)
-            logger.info(
-                "Shared secretes coincide: %s",
-                kyber_shared_secret_client == kyber_shared_secret_server,
+            # Time decapsulation and key extraction
+            decap_keyextract_start = timeit.default_timer()
+            ciphertext, shared_secret_server = server.encap_secret(public_key_client)
+            shared_secret_client = client.decap_secret(ciphertext)
+            hkdf_client = HKDF(
+                algorithm=hashes.SHA256(),
+                length=key_length,
+                salt=salt,
+                info=info,
+                backend=default_backend()
             )
-            if kyber_shared_secret_client != kyber_shared_secret_server:
-                 raise ValueError("Kyber shared secrets do not coincide!")
+            aes_key_client = hkdf_client.derive(shared_secret_client)
+            decap_keyextract_end = timeit.default_timer()
+            decap_keyextract_time = decap_keyextract_end - decap_keyextract_start
 
+            # Server-side key extraction (not timed)
+            hkdf_server = HKDF(
+                algorithm=hashes.SHA256(),
+                length=key_length,
+                salt=salt,
+                info=info,
+                backend=default_backend()
+            )
+            aes_key_server = hkdf_server.derive(shared_secret_server)
 
-            if kyber_shared_secret_client is None:
-                 raise ValueError("Kyber shared secret was not generated by the client.")
-            if kyber_client_secret_key is None:
-                 raise ValueError("Kyber client secret key was not exported.")
-            if kyber_ciphertext is None:
-                 raise ValueError("Kyber ciphertext was not generated.")
+            shared_secrets_match = (shared_secret_client == shared_secret_server)
+            derived_keys_match = (aes_key_client == aes_key_server)
+            total_time = encap_keygen_time + decap_keyextract_time
 
-
-            logger.info("Kyber encapsulation process completed successfully in handler function.")
-
-            # Return the necessary bytes values, base64 encoded for easier handling/output
             return {
-                "client_secret_key": base64.b64encode(kyber_client_secret_key).decode('utf-8'),
-                "ciphertext": base64.b64encode(kyber_ciphertext).decode('utf-8'),
-                # Return the client's shared secret, as this is what the decrypter will derive
-                "shared_secret": base64.b64encode(kyber_shared_secret_client).decode('utf-8')
+                "algorithm": kem_alg,
+                "encap_keygen_time": encap_keygen_time,
+                "decap_keyextract_time": decap_keyextract_time,
+                "total_time": total_time,
+                "shared_secrets_match": shared_secrets_match,
+                "derived_keys_match": derived_keys_match
             }
 
-    except Exception as e:
-        logger.error(f"An error occurred during Kyber encapsulation in handler function: {e}")
-        raise # Re-raise the exception so the calling code can handle it
+# Run the benchmark
+benchmark_results = []
+for _ in range(num_iterations):
+    result = benchmark_kem_with_hkdf_timed(kem_algorithm)
+    benchmark_results.append(result)
 
-# Keep the original __main__ block for direct testing of the handler
-if __name__ == "__main__":
-    print("Running kyber_handler.py directly (for testing)...")
-    try:
-        # This part runs the original Kyber example logic
-        kemalg = "ML-KEM-1024"
-        with oqs.KeyEncapsulation(kemalg) as client:
-            with oqs.KeyEncapsulation(kemalg) as server:
-                logger.info("Key encapsulation details:\n%s", pformat(client.details))
+# Create a pandas DataFrame from the results
+df = pd.DataFrame(benchmark_results)
 
-                public_key_client = client.generate_keypair()
-                ciphertext, shared_secret_server = server.encap_secret(public_key_client)
-                shared_secret_client = client.decap_secret(ciphertext)
+# Calculate the average times
+average_encap_keygen_time = df["encap_keygen_time"].mean()
+average_decap_keyextract_time = df["decap_keyextract_time"].mean()
+average_total_time = df["total_time"].mean()
 
-            logger.info(
-                "Shared secretes coincide: %s",
-                shared_secret_client == shared_secret_server,
-            )
-        print("Direct run of Kyber handler finished.")
-    except Exception as e:
-        print(f"Error during direct run: {e}")
+print("\nAverage Benchmark Results:")
+print(f"Algorithm: {kem_algorithm}")
+print(f"Average Encapsulation + Key Generation Time: {average_encap_keygen_time:.6f} seconds")
+print(f"Average Decapsulation + Key Extraction Time: {average_decap_keyextract_time:.6f} seconds")
+print(f"Average Total Time: {average_total_time:.6f} seconds")
+print(f"Shared Secrets Match: {df['shared_secrets_match'].all()}")
+print(f"Derived Keys Match: {df['derived_keys_match'].all()}")
+
+# Visualization with Matplotlib
+labels = ['Encapsulation + Key Gen', 'Decapsulation + Key Extract']
+times = [average_encap_keygen_time, average_decap_keyextract_time]
+
+plt.figure(figsize=(8, 6))
+plt.bar(labels, times, color=['skyblue', 'lightcoral'])
+plt.ylabel("Time (seconds)")
+plt.title(f"Average Performance of Key Exchange with HKDF ({kem_algorithm}, {num_iterations} iterations)")
+plt.xticks(labels)
+plt.tight_layout()
+plt.show()

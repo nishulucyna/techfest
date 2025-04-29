@@ -1,118 +1,85 @@
-# Key encapsulation Python example (as a module)
+# Key encapsulation Python example
 
 import logging
 from pprint import pformat
 from sys import stdout
-import base64 # Needed for base64 encoding the results
+
+import timeit
+import pandas as pd # type: ignore
+import matplotlib.pyplot as plt
+
+import os
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.backends import default_backend
 
 import oqs
 
-# Configure logging for OQS output
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO) # Keep INFO level to see Kyber details
-# Avoid adding handler multiple times if this module is imported elsewhere
-if not logger.handlers:
-    logger.addHandler(logging.StreamHandler(stdout))
-
-# Keep the original logger info calls
-logger.info("liboqs version: %s", oqs.oqs_version())
-logger.info("liboqs-python version: %s", oqs.oqs_python_version())
-logger.info(
-    "Enabled KEM mechanisms:\n%s",
-    pformat(oqs.get_enabled_kem_mechanisms(), compact=True),
-)
+logger.setLevel(logging.INFO)
+logger.addHandler(logging.StreamHandler(stdout))
 
 
-def perform_kyber_encapsulation(kemalg: str = "ML-KEM-1024"):
-    """
-    Performs Kyber key encapsulation for a given KEM algorithm.
-    Generates client keypair, server encapsulates, client decapsulates
-    for verification, and returns the results.
+# Configuration for benchmarking
+kemalg = "ML-KEM-1024"
+num_iterations = 100
+salt_length = 32
+salt = os.urandom(salt_length)
+info = b'aes-key'
+key_length = 32 
 
-    Args:
-        kemalg (str): The name of the Kyber KEM algorithm (default is "ML-KEM-1024").
+# Benchmarks
+results = []
 
-    Returns:
-        dict: A dictionary containing the base64 encoded client secret key,
-              ciphertext, and the shared secret (from client decapsulation).
-    Raises:
-        ValueError: If the shared secret, client secret key, or ciphertext are not generated or don't match.
-        Exception: For any errors during the OQS operations.
-    """
-    logger.info("\n--- Kyber Encapsulation Process (from kyber_handler function) ---")
+with oqs.KeyEncapsulation(kemalg) as client:
+    with oqs.KeyEncapsulation(kemalg) as server:
+        logger.info("Key encapsulation details:\n%s", pformat(client.details))
 
-    kyber_shared_secret_client = None
-    kyber_ciphertext = None
-    kyber_client_secret_key = None
+        # Key-pair generation at client end
+        public_key_client = client.generate_keypair()
+    
+        # Convert c_char_Array to bytes before calling .hex()
+        public_key_hex = bytes(public_key_client).hex()
+        secret_key_hex = bytes(client.secret_key).hex()
 
-    try:
-        # Create client and server with the specified KEM mechanism
-        with oqs.KeyEncapsulation(kemalg) as client:
-            with oqs.KeyEncapsulation(kemalg) as server:
-                logger.info("Key encapsulation details for %s:\n%s", kemalg, pformat(client.details))
+        # Keys are byte arrays, .hex() converts them to hexadecimal strings
+        logger.info("Client Public Key: %s", public_key_hex)
+        logger.info("Client Private Key: %s", secret_key_hex)
 
-                # Client generates its keypair
-                public_key_client = client.generate_keypair()
-                # Export the client's secret key - needed for decryption later
-                kyber_client_secret_key = client.export_secret_key()
+        # Kyber encapsulation at server end with client public key
+        ciphertext, shared_secret_server = server.encap_secret(public_key_client)
 
-                # The server encapsulates its secret using the client's public key
-                # This generates the Kyber ciphertext and the server's copy of the shared secret
-                kyber_ciphertext, kyber_shared_secret_server = server.encap_secret(public_key_client)
+        # Kyber decapsulation at client end with client private key
+        shared_secret_client = client.decap_secret(ciphertext)
 
-                # The client decapsulates the server's ciphertext to obtain the shared secret
-                # This is the shared secret the client will use for decryption
-                kyber_shared_secret_client = client.decap_secret(kyber_ciphertext)
+    logger.info(
+        "Shared secretes coincide: %s",
+        shared_secret_client == shared_secret_server,
+    )
 
-            # Verify that client and server shared secrets match (optional but good practice)
-            logger.info(
-                "Shared secretes coincide: %s",
-                kyber_shared_secret_client == kyber_shared_secret_server,
-            )
-            if kyber_shared_secret_client != kyber_shared_secret_server:
-                 raise ValueError("Kyber shared secrets do not coincide!")
+    # Derive AES key using HKDF
+    hkdf_server = HKDF(
+        algorithm=hashes.SHA256(),
+        length=key_length,
+        salt=salt,
+        info=info,
+        backend=default_backend()
+    )
+    aes_key_server = hkdf_server.derive(shared_secret_server)
 
+    hkdf_client = HKDF(
+        algorithm=hashes.SHA256(),
+        length=key_length,
+        salt=salt,
+        info=info,
+        backend=default_backend()
+    )
+    aes_key_client = hkdf_client.derive(shared_secret_client)
 
-            if kyber_shared_secret_client is None:
-                 raise ValueError("Kyber shared secret was not generated by the client.")
-            if kyber_client_secret_key is None:
-                 raise ValueError("Kyber client secret key was not exported.")
-            if kyber_ciphertext is None:
-                 raise ValueError("Kyber ciphertext was not generated.")
+    logger.info(
+        "Derived AES keys coincide: %s",
+        aes_key_client == aes_key_server,
+    )
 
-
-            logger.info("Kyber encapsulation process completed successfully in handler function.")
-
-            # Return the necessary bytes values, base64 encoded for easier handling/output
-            return {
-                "client_secret_key": base64.b64encode(kyber_client_secret_key).decode('utf-8'),
-                "ciphertext": base64.b64encode(kyber_ciphertext).decode('utf-8'),
-                # Return the client's shared secret, as this is what the decrypter will derive
-                "shared_secret": base64.b64encode(kyber_shared_secret_client).decode('utf-8')
-            }
-
-    except Exception as e:
-        logger.error(f"An error occurred during Kyber encapsulation in handler function: {e}")
-        raise # Re-raise the exception so the calling code can handle it
-
-# Keep the original __main__ block for direct testing of the handler
-if __name__ == "__main__":
-    print("Running kyber_handler.py directly (for testing)...")
-    try:
-        # This part runs the original Kyber example logic
-        kemalg = "ML-KEM-1024"
-        with oqs.KeyEncapsulation(kemalg) as client:
-            with oqs.KeyEncapsulation(kemalg) as server:
-                logger.info("Key encapsulation details:\n%s", pformat(client.details))
-
-                public_key_client = client.generate_keypair()
-                ciphertext, shared_secret_server = server.encap_secret(public_key_client)
-                shared_secret_client = client.decap_secret(ciphertext)
-
-            logger.info(
-                "Shared secretes coincide: %s",
-                shared_secret_client == shared_secret_server,
-            )
-        print("Direct run of Kyber handler finished.")
-    except Exception as e:
-        print(f"Error during direct run: {e}")
+    logger.info("Derived AES Key (Server): %s", aes_key_server.hex())
