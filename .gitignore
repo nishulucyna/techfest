@@ -22,3 +22,5 @@ dist/
 
 # Logging files
 *.log
+
+.ipynb_checkpoints/
