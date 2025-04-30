@@ -1,100 +1,79 @@
-# src/main_flow.py
-
+import base64
 import logging
-import os
+from sys import stdout
+from Crypto.Random import get_random_bytes
 
-from src.aes_handler import AESHandler
-from src.kyber_handler import encapsulate_kem, decapsulate_kem, generate_key_pair as generate_kyber_key_pair, derive_aes_key as kyber_derive_aes_key # Import derive_aes_key
-from src.dilithium_handler import sign_message, verify_signature, generate_key_pair as generate_dilithium_key_pair
-
+# Import from modules
+from src.aes_handler import encrypt_aes256_gcm, decrypt_aes256_gcm, derive_aes_key
+from src.kyber_handler import perform_kyber_encapsulation
+from src.dilithium_handler import sign_data, verify_signature
+# Logger setup
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.INFO)  # Set to INFO to suppress debug logs
+if not logger.handlers:
+    logger.addHandler(logging.StreamHandler(stdout))
+
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    print("\n=== Post-Quantum Hybrid Encryption (AES-GCM + Kyber + Dilithium) ===")
+    message = input("Enter the message to encrypt: ")
 
-    # --- Get Plaintext Input from User ---
-    plaintext_input = input("Enter the plaintext to encrypt: ").encode('utf-8')
-    logger.info(f"User provided plaintext (hex): {plaintext_input.hex()}")
+    # Step 1: Kyber Key Exchange
+    kyber = perform_kyber_encapsulation()
+    shared_secret = kyber["shared_secret"]
+    ciphertext_kyber = kyber["ciphertext"]
+    client_secret_key = kyber["client_secret_key"]
 
-    # --- Kyber Key Pair Generation and Encapsulation ---
-    logger.info("\n--- Kyber Key Pair Generation and Encapsulation ---")
-    kyber_public_key, kyber_private_key = generate_kyber_key_pair()
-    derived_aes_key, salt, kyber_ciphertext = encapsulate_kem(kyber_public_key)
+    # Step 2: Derive AES Key using HKDF
+    salt = get_random_bytes(16)
+    derived_key = derive_aes_key(shared_secret, salt)
 
-    if not derived_aes_key:
-        logger.error("Failed to establish a secure channel using Kyber.")
+    # Step 3: Encrypt the message
+    aes = encrypt_aes256_gcm(message, derived_key)
+    nonce, ciphertext, tag = aes["nonce"], aes["ciphertext"], aes["tag"]
+
+    # Step 4: Create package to sign
+    package = ciphertext_kyber + salt + nonce + tag + ciphertext
+
+    # Step 5: Sign the package using Dilithium
+    dilithium = sign_data(package)
+    signature = dilithium["signature"]
+    public_key = dilithium["public_key"]
+
+    # Step 6: Transmit package
+    print("\n--- Transmit This Data ---")
+    print("Kyber Ciphertext:", base64.b64encode(ciphertext_kyber).decode())
+    print("HKDF Salt:", base64.b64encode(salt).decode())
+    print("AES Nonce:", base64.b64encode(nonce).decode())
+    print("AES Tag:", base64.b64encode(tag).decode())
+    print("AES Ciphertext:", base64.b64encode(ciphertext).decode())
+    print("Dilithium Public Key:", base64.b64encode(public_key).decode())
+    print("Dilithium Signature:", base64.b64encode(signature).decode())
+
+    # --- Decryption Process ---
+    print("\n=== Decryption & Verification ===")
+
+    # Step 1: Verify the signature
+    print("\n[Step 1] ✅ Verifying Signature...")
+    is_valid = verify_signature(package, signature, public_key)
+    print("Signature Valid:", is_valid)
+
+    if not is_valid:
+        print("❌ Signature verification failed. Aborting decryption.")
         return
 
-    logger.info("Successfully established a shared secret and derived an AES key using Kyber encapsulation.")
-    logger.info(f"Salt (for HKDF): {salt.hex()}")
-    logger.info(f"Kyber Ciphertext: {kyber_ciphertext.hex()}")
-    logger.info(f"Derived AES Key (initial): {derived_aes_key.hex()}")
-    logger.info(f"Kyber Public Key: {bytes(kyber_public_key).hex()}")
-    logger.info(f"Kyber Private Key: {bytes(kyber_private_key).hex()}")
+    # Step 2: Derive AES key again using shared secret + salt
+    print("\n[Step 2] Deriving AES Key using shared secret + salt...")
+    derived_key = derive_aes_key(shared_secret, salt)
 
-    # --- AES Encryption ---
-    logger.info("\n--- AES Encryption ---")
-    aes_handler = AESHandler()
-    iv = os.urandom(12) # Generate IV here
-    ciphertext, iv, tag = aes_handler.encrypt(plaintext_input, derived_aes_key, iv) # Pass IV to encrypt
-    logger.info(f"AES Encrypted Ciphertext (hex): {ciphertext.hex()}")
-    logger.info(f"AES Authentication Tag (hex): {tag.hex()}")
-    logger.info(f"AES IV (hex): {iv.hex()}")
-
-    # --- Package the Data for Signing ---
-    package_to_sign = kyber_ciphertext + salt + iv + ciphertext + tag
-    logger.info(f"\n--- Data Package to Sign (hex) ---")
-    logger.info(f"{package_to_sign.hex()}")
-
-    # --- Dilithium Signing ---
-    logger.info("\n--- Dilithium Signing ---")
-    dilithium_public_key, dilithium_private_key_bytes = generate_dilithium_key_pair() # Get bytes here
-    signature = sign_message(package_to_sign, dilithium_private_key_bytes) # Pass the message and private key bytes
-    logger.info(f"Message to Sign (hex): {package_to_sign.hex()}")
-    logger.info(f"Dilithium Public Key: {bytes(dilithium_public_key).hex()}")
-    logger.info(f"Dilithium Private Key (hex): {dilithium_private_key_bytes.hex()}") # Log bytes
-    logger.info(f"Dilithium Signature: {signature.hex()}")
-
-    # --- Simulate Transmission ---
-    received_kyber_ciphertext = kyber_ciphertext
-    received_salt = salt
-    received_iv = iv
-    received_aes_ciphertext = ciphertext
-    received_tag = tag
-    received_signature = signature
-    received_dilithium_public_key = dilithium_public_key
-
-    # --- Kyber Decapsulation ---
-    logger.info("\n--- Kyber Decapsulation ---")
-    shared_secret_decapsulated = decapsulate_kem(received_kyber_ciphertext, kyber_private_key) # Pass private key
-    derived_aes_key_decapsulated = kyber_derive_aes_key(shared_secret_decapsulated, received_salt) # Call the function directly
-
-    logger.info(f"Decapsulated Shared Secret (hex): {shared_secret_decapsulated.hex()}")
-    logger.info(f"Derived AES Key (decapsulated) (hex): {derived_aes_key_decapsulated.hex()}")
-
-    # --- AES Decryption ---
-    logger.info("\n--- AES Decryption ---")
-    aes_handler_decryption = AESHandler()
+    # Step 3: Decrypt the ciphertext
+    print("\n[Step 3] Decrypting AES-GCM Ciphertext...")
     try:
-        decrypted_plaintext = aes_handler_decryption.decrypt(
-            received_aes_ciphertext, received_iv, derived_aes_key_decapsulated, tag=received_tag # Pass the tag
-        )
-        logger.info(f"Decrypted Plaintext: {decrypted_plaintext.decode('utf-8')}")
+        decrypted_message = decrypt_aes256_gcm(ciphertext, derived_key, nonce, tag)
+        print("\n✅ Final Decrypted Message:", decrypted_message)
     except Exception as e:
-        logger.error(f"AES Decryption Error: {e}")
+        print("❌ AES decryption failed:", e)
 
-    # --- Dilithium Signature Verification ---
-    logger.info("\n--- Dilithium Signature Verification ---")
-    is_signature_valid = verify_signature(
-        package_to_sign, received_signature, received_dilithium_public_key
-    )
-    logger.info(f"Signature verification result: {is_signature_valid}")
-
-    if is_signature_valid:
-        logger.info("Dilithium signature is valid. The package is authentic.")
-    else:
-        logger.error("Dilithium signature verification failed. The package is not authentic.")
 
 if __name__ == "__main__":
     main()
